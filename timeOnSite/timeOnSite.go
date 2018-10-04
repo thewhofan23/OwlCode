@@ -110,6 +110,16 @@ type siteOverall struct {
 	totalTime     int
 }
 
+// Struct to hold the bound of a GPS rectangle
+type latLongRange struct {
+	longMin float32
+	longMax float32
+	latMin  float32
+	latMax  float32
+}
+
+// **** Main *****
+
 func main() {
 
 	// TODO: Remove hardcoding when reading
@@ -139,6 +149,9 @@ func main() {
 	fmt.Println("Runtime: ", time.Since(start))
 }
 
+// **** SUPPORTING FUNCTIONS ****
+
+// Requests driver and vehicle information from graphQL
 func tosQuery(id, end, duration string) tosData {
 	// Read in the access token from an untracked local file
 	file, err := os.Open("config.json")
@@ -217,6 +230,7 @@ func tosQuery(id, end, duration string) tosData {
 	return data
 }
 
+// Requests address information from graphQL
 func siteQuery(id string) siteData {
 	// Read in the access token from an untracked local file
 	file, err := os.Open("config.json")
@@ -274,6 +288,7 @@ func siteQuery(id string) siteData {
 	return data
 }
 
+// Creates the bounding rectangle used to quickly condition if GPS coordinate is within a site
 func getGPSBound(lat, long, r float32) latLongRange {
 	// Assuming r is in meters
 	// First calculate the min and max latitude, since that doesn't change much as you move along range
@@ -287,9 +302,11 @@ func getGPSBound(lat, long, r float32) latLongRange {
 	return bound
 }
 
+// Iterates through site, vehicle, and driver information to
 func checkSite(sd siteData, td tosData, endTime int, duration int) []siteOverall {
 	siteReport := make([]siteOverall, 0)
 	startTime := endTime - duration
+	// Check at each site
 	for _, site := range sd.Group.Sites {
 		totalTimeAtSite := 0
 		bound := getGPSBound(site.Latitude, site.Longitude, site.Radius)
@@ -297,8 +314,10 @@ func checkSite(sd siteData, td tosData, endTime int, duration int) []siteOverall
 		var siteReportElem siteOverall
 		totalUniqVehicles := 0
 		totalUniqVisits := 0
+		// For each site, check each vehicle
 		for _, vehicle := range td.Group.Devices {
 			didVisit := false
+			// Check each end of trip for each vehicle for each site to figure out if vehicle ended within a site
 			for i, trip := range vehicle.VAR.TripEntries {
 				// Check if this is the end of the recorded trips, if so, use user inputted endTime as the departureTime
 				var departureTime int
@@ -322,10 +341,12 @@ func checkSite(sd siteData, td tosData, endTime int, duration int) []siteOverall
 					}
 				}
 			}
+			// If the vehicle visited one site during time range, increment number of vehicles that visited by one
 			if didVisit {
 				totalUniqVehicles++
 			}
 		}
+		// Append this site's information to the total site list, if one vehicle has visited
 		if totalUniqVehicles > 0 {
 			siteReportElem = siteOverall{lineEntry, site.Name, totalUniqVehicles, totalUniqVisits, totalTimeAtSite}
 			siteReport = append(siteReport, siteReportElem)
@@ -384,11 +405,4 @@ func greatCircleDist(lat1, long1, lat2, long2 float32) float32 {
 // Returning float64 since golang math package uses float64, instead of float32
 func degToRad(x float32) float64 {
 	return float64(x) * math.Pi / 180
-}
-
-type latLongRange struct {
-	longMin float32
-	longMax float32
-	latMin  float32
-	latMax  float32
 }
