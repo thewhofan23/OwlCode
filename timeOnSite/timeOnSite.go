@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -34,6 +36,8 @@ type address struct {
 // Segment - Create struct to unmarshal and hold the start/end segments
 type segment struct {
 	Address address
+	Lat     float32
+	Lng     float32
 	Time    int
 }
 
@@ -76,6 +80,7 @@ type site struct {
 	Latitude  float32
 	Longitude float32
 	Name      string
+	Radius    float32
 }
 
 // Sites - Create struct to unmarshal and hold array of Site data
@@ -87,17 +92,51 @@ type siteData struct {
 	Group sites
 }
 
+// Structs to contain the resulting site information after processing
+type siteReportLine struct {
+	driverName  string
+	arrival     int
+	departure   int
+	vehicleName string
+	lat         float32
+	long        float32
+}
+
+type siteOverall struct {
+	lineEntry     []siteReportLine
+	siteName      string
+	totalVehicles int
+	totalVisits   int
+	totalTime     int
+}
+
 func main() {
 
 	// TODO: Remove hardcoding when reading
+	start := time.Now()
 	groupID := "3991"
-	endTime := "1537472193229"
-	duration := "8640000"
+	endTime := "1535871599999"
+	duration := "8380799000"
+	expanded := false
+
+	fmt.Println("Running Time on Site Report...")
 
 	tosData := tosQuery(groupID, endTime, duration)
-	fmt.Println(tosData.Group.Devices[4].VAR.TripEntries[0].Start.Address.Name)
 	siteData := siteQuery(groupID)
-	fmt.Println(siteData.Group.Sites[2].Name)
+	intEndTime, err := strconv.Atoi(endTime)
+	if err != nil {
+		fmt.Println("Could not convert endTime to an integer")
+		return
+	}
+	intDuration, err := strconv.Atoi(duration)
+	if err != nil {
+		fmt.Println("Could not convert duration to an integer")
+		return
+	}
+	report := checkSite(siteData, tosData, intEndTime, intDuration)
+	printSite(report, expanded)
+
+	fmt.Println("Runtime: ", time.Since(start))
 }
 
 func tosQuery(id, end, duration string) tosData {
@@ -123,12 +162,16 @@ func tosQuery(id, end, duration string) tosData {
 					tripEntries {
 					start {
 						time
+						lat
+						lng
 						address {
 						name
 						}
 					}
 					end {
 						time
+						lat
+						lng
 						address {
 						name
 						}
@@ -167,6 +210,7 @@ func tosQuery(id, end, duration string) tosData {
 		fmt.Println(string(b))
 		//return nil
 	}
+	defer resp.Body.Close()
 	body, _ := ioutil.ReadAll(resp.Body)
 	var data tosData
 	json.Unmarshal(body, &data)
@@ -194,6 +238,7 @@ func siteQuery(id string) siteData {
 				name
 				latitude
 				longitude
+				radius
 			}
 		}
 	}
@@ -222,8 +267,128 @@ func siteQuery(id string) siteData {
 		fmt.Println(string(b))
 		//return nil
 	}
+	defer resp.Body.Close()
 	body, _ := ioutil.ReadAll(resp.Body)
 	var data siteData
 	json.Unmarshal(body, &data)
 	return data
+}
+
+func getGPSBound(lat, long, r float32) latLongRange {
+	// Assuming r is in meters
+	// First calculate the min and max latitude, since that doesn't change much as you move along range
+	// TODO: Find better way to store (config?)
+	// Assuming radius is sufficently small, and vehicles not driving north or south enough, such that we have to check for latitude overlapping poles
+	var bound latLongRange
+	bound.latMin = lat - (r/6371000)*180/math.Pi
+	bound.latMax = lat + (r/6371000)*180/math.Pi
+	bound.longMin = long - (r/6371000)*180/math.Pi
+	bound.longMax = long + (r/6371000)*180/math.Pi
+	return bound
+}
+
+func checkSite(sd siteData, td tosData, endTime int, duration int) []siteOverall {
+	siteReport := make([]siteOverall, 0)
+	startTime := endTime - duration
+	for _, site := range sd.Group.Sites {
+		totalTimeAtSite := 0
+		bound := getGPSBound(site.Latitude, site.Longitude, site.Radius)
+		lineEntry := make([]siteReportLine, 0)
+		var siteReportElem siteOverall
+		totalUniqVehicles := 0
+		totalUniqVisits := 0
+		for _, vehicle := range td.Group.Devices {
+			didVisit := false
+			for i, trip := range vehicle.VAR.TripEntries {
+				// Check if this is the end of the recorded trips, if so, use user inputted endTime as the departureTime
+				var departureTime int
+				if i >= len(vehicle.VAR.TripEntries)-1 {
+					departureTime = endTime
+				} else {
+					departureTime = vehicle.VAR.TripEntries[i+1].Start.Time
+				}
+				// Check if point is within bounds and within time frame before using greatCircleDist (heavy computation)
+				if trip.End.Lat > bound.latMin && trip.End.Lat < bound.latMax &&
+					trip.End.Lng > bound.longMin && trip.End.Lng < bound.longMax && departureTime-trip.End.Time > 0 && trip.End.Time >= startTime {
+
+					// Calculate if distance is within radius using great circle formula
+					if greatCircleDist(trip.End.Lat, trip.End.Lng, site.Latitude, site.Longitude) <= site.Radius {
+						arrivalTime := trip.End.Time
+						sRL := siteReportLine{trip.Driver.Name, arrivalTime, departureTime, vehicle.Name, trip.End.Lat, trip.End.Lng}
+						lineEntry = append(lineEntry, sRL)
+						totalTimeAtSite += (departureTime - arrivalTime) / 1000
+						totalUniqVisits++
+						didVisit = true
+					}
+				}
+			}
+			if didVisit {
+				totalUniqVehicles++
+			}
+		}
+		if totalUniqVehicles > 0 {
+			siteReportElem = siteOverall{lineEntry, site.Name, totalUniqVehicles, totalUniqVisits, totalTimeAtSite}
+			siteReport = append(siteReport, siteReportElem)
+		}
+	}
+	return siteReport
+}
+
+func printSite(siteReports []siteOverall, expanded bool) {
+	fmt.Printf("\n\n")
+	for i, siteReport := range siteReports {
+		fmt.Printf("%d %-40s %-5d %d %s \n", i, siteReport.siteName, siteReport.totalVehicles, siteReport.totalVisits,
+			secToHours(siteReport.totalTime/siteReport.totalVisits))
+		if expanded {
+			for _, visit := range siteReport.lineEntry {
+				fmt.Printf("%-6s %-25s %-35s %-35s %12s %f %f \n", visit.vehicleName, visit.driverName, time.Unix(int64(visit.arrival/1000), 0),
+					time.Unix(int64(visit.departure/1000), 0), secToHours((visit.departure-visit.arrival)/1000), visit.lat, visit.long)
+			}
+			fmt.Printf("\n")
+		}
+	}
+	fmt.Printf("\n")
+}
+
+// Formats seconds into the time on site format of Xh Ym, or Xm Ys
+func secToHours(seconds int) string {
+	if seconds/3600 > 0 {
+		hours := seconds / 3600
+		min := seconds % 60
+		return strconv.Itoa(hours) + "h " + strconv.Itoa(min) + "m"
+	} else {
+		min := seconds / 60
+		sec := seconds % 60
+		return strconv.Itoa(min) + "m " + strconv.Itoa(sec) + "s"
+	}
+}
+
+// Calculates the great circle distance between two GPS coordinates on an geometrical approximation of Earth (Ellipsoid)
+func greatCircleDist(lat1, long1, lat2, long2 float32) float32 {
+	R := 6371 * 1000 // meters
+
+	// TODO: should variables all be float64, or is it fine to cast here? Speed (unknown) vs space (doubled)
+	radDifLat := degToRad(lat2 - lat1)
+	radDifLong := degToRad(long2 - long1)
+	radLat1 := degToRad(lat1)
+	radLat2 := degToRad(lat2)
+	// The haversine formula
+	a := math.Sin(radDifLat/2)*math.Sin(radDifLat/2) + math.Cos(radLat1)*
+		math.Cos(radLat2)*math.Sin(radDifLong/2)*math.Sin(radDifLong/2)
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	d := float64(R) * c
+
+	return float32(d)
+}
+
+// Returning float64 since golang math package uses float64, instead of float32
+func degToRad(x float32) float64 {
+	return float64(x) * math.Pi / 180
+}
+
+type latLongRange struct {
+	longMin float32
+	longMax float32
+	latMin  float32
+	latMax  float32
 }

@@ -1,6 +1,7 @@
 # Files
 /timeOnSite/config.json
 /timeOnSite/debug
+/timeOnSite/.vscode
 
 # Compiled source #
 ###################
