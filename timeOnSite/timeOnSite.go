@@ -3,12 +3,17 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"math"
 	"net/http"
 	"os"
+	"runtime/pprof"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -119,20 +124,49 @@ type latLongRange struct {
 }
 
 // **** Main *****
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
 
 func main() {
 
+	flag.Parse()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
+	programStart := time.Now()
+
 	// TODO: Remove hardcoding when reading
-	start := time.Now()
+
 	groupID := "3991"
-	endTime := "1535871599999"
-	duration := "8380799000"
+	endTime := "1525158000999"
+	duration := "10627199000"
 	expanded := false
 
 	fmt.Println("Running Time on Site Report...")
+	// Grab vehicle and driver data from graphQL
+	start := time.Now()
+	tosData, err := tosQuery(groupID, endTime, duration)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println("Total runtime to grab vehicle/location data: ", time.Since(start))
 
-	tosData := tosQuery(groupID, endTime, duration)
-	siteData := siteQuery(groupID)
+	// Grab site data from graphQL
+	siteData, err := siteQuery(groupID)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// Format input arguments
 	intEndTime, err := strconv.Atoi(endTime)
 	if err != nil {
 		fmt.Println("Could not convert endTime to an integer")
@@ -143,20 +177,24 @@ func main() {
 		fmt.Println("Could not convert duration to an integer")
 		return
 	}
-	report := checkSite(siteData, tosData, intEndTime, intDuration)
-	printSite(report, expanded)
 
-	fmt.Println("Runtime: ", time.Since(start))
+	// Run the time on site report using the data from earlier graphQL queries
+	report := checkSite(siteData, tosData, intEndTime, intDuration)
+	// Format and print the results of checkSite
+	printSite(report, expanded)
+	fmt.Println("Total Program Runtime: ", time.Since(programStart))
 }
 
 // **** SUPPORTING FUNCTIONS ****
 
-// Requests driver and vehicle information from graphQL
-func tosQuery(id, end, duration string) tosData {
+// Requests driver and vehicle information from graphQL /M
+// Nearly all runtime of program happens here when requesting data from the server. Around 90% of total time
+func tosQuery(id, end, duration string) (tosData, error) {
 	// Read in the access token from an untracked local file
 	file, err := os.Open("config.json")
 	if err != nil {
 		fmt.Println("File open failed: ", err)
+		return tosData{}, err
 	}
 	defer file.Close()
 	byteValue, _ := ioutil.ReadAll(file)
@@ -199,7 +237,6 @@ func tosQuery(id, end, duration string) tosData {
 			}
 			
 		`
-
 	q := graphQL{
 		Query: query,
 	}
@@ -210,32 +247,37 @@ func tosQuery(id, end, duration string) tosData {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(b))
 	if err != nil {
 		fmt.Printf("Error generating request: %s", err)
+		return tosData{}, err
 	}
 	req.Header.Add("X-Access-Token", conf.Token)
+	// Request data
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("Error getting response: %s", err)
-	}
-	// Check if we get any page errors, this is not caught by err
-	if resp.StatusCode != 200 {
-		fmt.Println("Error Code")
-		b, _ := ioutil.ReadAll(resp.Body)
-		fmt.Println(string(b))
-		//return nil
+		return tosData{}, err
 	}
 	defer resp.Body.Close()
-	body, _ := ioutil.ReadAll(resp.Body)
-	var data tosData
-	json.Unmarshal(body, &data)
-	return data
+	// Check if we get any page errors, this is not caught by err
+	if resp.StatusCode == 200 {
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return tosData{}, err
+		}
+		var data tosData
+		json.Unmarshal(body, &data)
+		return data, nil
+	}
+	return tosData{}, errors.New("Page error:" + strconv.Itoa(resp.StatusCode))
+
 }
 
 // Requests address information from graphQL
-func siteQuery(id string) siteData {
+func siteQuery(id string) (siteData, error) {
 	// Read in the access token from an untracked local file
 	file, err := os.Open("config.json")
 	if err != nil {
 		fmt.Println("File open failed: ", err)
+		return siteData{}, err
 	}
 	defer file.Close()
 	byteValue, _ := ioutil.ReadAll(file)
@@ -268,24 +310,27 @@ func siteQuery(id string) siteData {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(b))
 	if err != nil {
 		fmt.Printf("Error generating request: %s", err)
+		return siteData{}, err
 	}
 	req.Header.Add("X-Access-Token", conf.Token)
+	// Request data from server
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("Error getting response: %s", err)
-	}
-	// Check if we get any page errors, this is not caught by err
-	if resp.StatusCode != 200 {
-		fmt.Println("Error Code")
-		b, _ := ioutil.ReadAll(resp.Body)
-		fmt.Println(string(b))
-		//return nil
+		return siteData{}, err
 	}
 	defer resp.Body.Close()
-	body, _ := ioutil.ReadAll(resp.Body)
-	var data siteData
-	json.Unmarshal(body, &data)
-	return data
+	// Check if we get any page errors, this is not caught by err
+	if resp.StatusCode == 200 {
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return siteData{}, err
+		}
+		var data siteData
+		json.Unmarshal(body, &data)
+		return data, nil
+	}
+	return siteData{}, errors.New("Page error:" + strconv.Itoa(resp.StatusCode))
 }
 
 // Creates the bounding rectangle used to quickly condition if GPS coordinate is within a site
@@ -295,66 +340,77 @@ func getGPSBound(lat, long, r float32) latLongRange {
 	// TODO: Find better way to store (config?)
 	// Assuming radius is sufficently small, and vehicles not driving north or south enough, such that we have to check for latitude overlapping poles
 	var bound latLongRange
-	bound.latMin = lat - (r/6371000)*180/math.Pi
-	bound.latMax = lat + (r/6371000)*180/math.Pi
-	bound.longMin = long - (r/6371000)*180/math.Pi
-	bound.longMax = long + (r/6371000)*180/math.Pi
+	bound.latMin = lat - (2*r/6371000)*180/math.Pi
+	bound.latMax = lat + (2*r/6371000)*180/math.Pi
+	bound.longMin = long - (2*r/6371000)*180/math.Pi
+	bound.longMax = long + (2*r/6371000)*180/math.Pi
 	return bound
+}
+
+func siteVehicle(wg *sync.WaitGroup, siteReport *siteOverall, s site, td tosData, startTime, endTime, duration int) {
+	defer wg.Done()
+	lineEntry := make([]siteReportLine, 0)
+	bound := getGPSBound(s.Latitude, s.Longitude, s.Radius)
+	var siteReportElem siteOverall
+	totalTimeAtSite := 0
+	totalUniqVehicles := 0
+	totalUniqVisits := 0
+	// For each site, check each vehicle
+	for _, vehicle := range td.Group.Devices {
+		didVisit := false
+		// Check each end of trip for each vehicle for each site to figure out if vehicle ended within a site
+		for i, trip := range vehicle.VAR.TripEntries {
+			// Check if this is the end of the recorded trips, if so, use user inputted endTime as the departureTime
+			var departureTime int
+			if i >= len(vehicle.VAR.TripEntries)-1 {
+				departureTime = endTime
+			} else {
+				departureTime = vehicle.VAR.TripEntries[i+1].Start.Time
+			}
+			// Check if point is within bounds and within time frame before using greatCircleDist (heavy computation)
+			if trip.End.Lat > bound.latMin && trip.End.Lat < bound.latMax &&
+				trip.End.Lng > bound.longMin && trip.End.Lng < bound.longMax && departureTime-trip.End.Time > 0 && trip.End.Time >= startTime {
+
+				// Calculate if distance is within radius using great circle formula
+				if greatCircleDist(trip.End.Lat, trip.End.Lng, s.Latitude, s.Longitude) <= s.Radius {
+					arrivalTime := trip.End.Time
+					sRL := siteReportLine{trip.Driver.Name, arrivalTime, departureTime, vehicle.Name, trip.End.Lat, trip.End.Lng}
+					lineEntry = append(lineEntry, sRL)
+					totalTimeAtSite += (departureTime - arrivalTime) / 1000
+					totalUniqVisits++
+					didVisit = true
+				}
+			}
+		}
+		// If the vehicle visited one site during time range, increment number of vehicles that visited by one
+		if didVisit {
+			totalUniqVehicles++
+		}
+	}
+	// Append this site's information to the total site list, if one vehicle has visited
+	if totalUniqVehicles > 0 {
+		siteReportElem = siteOverall{lineEntry, s.Name, totalUniqVehicles, totalUniqVisits, totalTimeAtSite}
+		*siteReport = siteReportElem
+	}
 }
 
 // Iterates through site, vehicle, and driver information to
 func checkSite(sd siteData, td tosData, endTime int, duration int) []siteOverall {
-	siteReport := make([]siteOverall, 0)
+	wg := &sync.WaitGroup{}
+	siteReport := make([]siteOverall, len(sd.Group.Sites))
 	startTime := endTime - duration
 	// Check at each site
-	for _, site := range sd.Group.Sites {
-		totalTimeAtSite := 0
-		bound := getGPSBound(site.Latitude, site.Longitude, site.Radius)
-		lineEntry := make([]siteReportLine, 0)
-		var siteReportElem siteOverall
-		totalUniqVehicles := 0
-		totalUniqVisits := 0
-		// For each site, check each vehicle
-		for _, vehicle := range td.Group.Devices {
-			didVisit := false
-			// Check each end of trip for each vehicle for each site to figure out if vehicle ended within a site
-			for i, trip := range vehicle.VAR.TripEntries {
-				// Check if this is the end of the recorded trips, if so, use user inputted endTime as the departureTime
-				var departureTime int
-				if i >= len(vehicle.VAR.TripEntries)-1 {
-					departureTime = endTime
-				} else {
-					departureTime = vehicle.VAR.TripEntries[i+1].Start.Time
-				}
-				// Check if point is within bounds and within time frame before using greatCircleDist (heavy computation)
-				if trip.End.Lat > bound.latMin && trip.End.Lat < bound.latMax &&
-					trip.End.Lng > bound.longMin && trip.End.Lng < bound.longMax && departureTime-trip.End.Time > 0 && trip.End.Time >= startTime {
-
-					// Calculate if distance is within radius using great circle formula
-					if greatCircleDist(trip.End.Lat, trip.End.Lng, site.Latitude, site.Longitude) <= site.Radius {
-						arrivalTime := trip.End.Time
-						sRL := siteReportLine{trip.Driver.Name, arrivalTime, departureTime, vehicle.Name, trip.End.Lat, trip.End.Lng}
-						lineEntry = append(lineEntry, sRL)
-						totalTimeAtSite += (departureTime - arrivalTime) / 1000
-						totalUniqVisits++
-						didVisit = true
-					}
-				}
-			}
-			// If the vehicle visited one site during time range, increment number of vehicles that visited by one
-			if didVisit {
-				totalUniqVehicles++
-			}
-		}
-		// Append this site's information to the total site list, if one vehicle has visited
-		if totalUniqVehicles > 0 {
-			siteReportElem = siteOverall{lineEntry, site.Name, totalUniqVehicles, totalUniqVisits, totalTimeAtSite}
-			siteReport = append(siteReport, siteReportElem)
-		}
+	for i, site := range sd.Group.Sites {
+		wg.Add(1)
+		go siteVehicle(wg, &siteReport[i], site, td, startTime, endTime, duration)
 	}
+
+	wg.Wait()
+
 	return siteReport
 }
 
+// Prints the time on site information in a presentable way
 func printSite(siteReports []siteOverall, expanded bool) {
 	fmt.Printf("\n\n")
 	for i, siteReport := range siteReports {
@@ -377,11 +433,10 @@ func secToHours(seconds int) string {
 		hours := seconds / 3600
 		min := seconds % 60
 		return strconv.Itoa(hours) + "h " + strconv.Itoa(min) + "m"
-	} else {
-		min := seconds / 60
-		sec := seconds % 60
-		return strconv.Itoa(min) + "m " + strconv.Itoa(sec) + "s"
 	}
+	min := seconds / 60
+	sec := seconds % 60
+	return strconv.Itoa(min) + "m " + strconv.Itoa(sec) + "s"
 }
 
 // Calculates the great circle distance between two GPS coordinates on an geometrical approximation of Earth (Ellipsoid)
