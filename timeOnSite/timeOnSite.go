@@ -27,8 +27,9 @@ type graphQL struct {
 
 // Config - Importing configs from config.json
 type config struct {
-	Token   string // Access token
-	Timeout int    // HTTP timeout
+	Token      string  // Access token
+	Timeout    int     // HTTP timeout
+	BoundMulti float32 // Bound Multiplier
 }
 
 // **** Device Data Structs *****
@@ -128,6 +129,7 @@ var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
 
 func main() {
 
+	// Used to profile the program
 	flag.Parse()
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -145,9 +147,9 @@ func main() {
 	// TODO: Remove hardcoding when reading
 
 	groupID := "3991"
-	endTime := "1525158000999"
-	duration := "10627199000"
-	expanded := false
+	endTime := "1539057599999"
+	duration := "3600000"
+	expanded := true
 
 	fmt.Println("Running Time on Site Report...")
 	// Grab vehicle and driver data from graphQL
@@ -157,7 +159,9 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println("Total runtime to grab vehicle/location data: ", time.Since(start))
+	fmt.Println("Total time to fetch vehicle/location data: ", time.Since(start))
+
+	start1 := time.Now()
 
 	// Grab site data from graphQL
 	siteData, err := siteQuery(groupID)
@@ -165,6 +169,8 @@ func main() {
 		fmt.Println(err)
 		return
 	}
+
+	fmt.Println("Total time to fetch site data: ", time.Since(start1))
 
 	// Format input arguments
 	intEndTime, err := strconv.Atoi(endTime)
@@ -197,7 +203,11 @@ func tosQuery(id, end, duration string) (tosData, error) {
 		return tosData{}, err
 	}
 	defer file.Close()
-	byteValue, _ := ioutil.ReadAll(file)
+	byteValue, err := ioutil.ReadAll(file)
+	if err != nil {
+		fmt.Println("Could not read the config file in site query", err)
+		return tosData{}, err
+	}
 	var conf config
 	json.Unmarshal(byteValue, &conf)
 
@@ -241,6 +251,10 @@ func tosQuery(id, end, duration string) (tosData, error) {
 		Query: query,
 	}
 	b, err := json.Marshal(q)
+	if err != nil {
+		fmt.Println("Error marshalling query information", err)
+		return tosData{}, err
+	}
 
 	// Generate the API query
 	url := "https://api.samsara.com/v1/admin/graphql"
@@ -280,7 +294,11 @@ func siteQuery(id string) (siteData, error) {
 		return siteData{}, err
 	}
 	defer file.Close()
-	byteValue, _ := ioutil.ReadAll(file)
+	byteValue, err := ioutil.ReadAll(file)
+	if err != nil {
+		fmt.Println("Could not read the config file in site query", err)
+		return siteData{}, err
+	}
 	var conf config
 	json.Unmarshal(byteValue, &conf)
 
@@ -304,6 +322,10 @@ func siteQuery(id string) (siteData, error) {
 		Query: query,
 	}
 	b, err := json.Marshal(q)
+	if err != nil {
+		fmt.Println("Error marshalling query information", err)
+		return siteData{}, err
+	}
 
 	// Generate the API query
 	url := "https://api.samsara.com/v1/admin/graphql"
@@ -334,23 +356,41 @@ func siteQuery(id string) (siteData, error) {
 }
 
 // Creates the bounding rectangle used to quickly condition if GPS coordinate is within a site
-func getGPSBound(lat, long, r float32) latLongRange {
-	// Assuming r is in meters
-	// First calculate the min and max latitude, since that doesn't change much as you move along range
-	// TODO: Find better way to store (config?)
-	// Assuming radius is sufficently small, and vehicles not driving north or south enough, such that we have to check for latitude overlapping poles
+func getGPSBound(lat, long, r float32) (latLongRange, error) {
+	file, err := os.Open("config.json")
+	if err != nil {
+		fmt.Println("File open failed: ", err)
+		return latLongRange{}, err
+	}
+	defer file.Close()
+	byteValue, err := ioutil.ReadAll(file)
+	if err != nil {
+		fmt.Println("Could not read the json config file in!", err)
+		return latLongRange{}, err
+	}
+	var conf config
+	json.Unmarshal(byteValue, &conf)
+
+	// Assuming radius is sufficently small, and vehicles are not driving north or south enough,
+	// such that we have to check for latitude overlapping at the poles
+	// TODO: add conditional to check if latitude overlaps at pole
 	var bound latLongRange
-	bound.latMin = lat - (2*r/6371000)*180/math.Pi
-	bound.latMax = lat + (2*r/6371000)*180/math.Pi
-	bound.longMin = long - (2*r/6371000)*180/math.Pi
-	bound.longMax = long + (2*r/6371000)*180/math.Pi
-	return bound
+	multi := conf.BoundMulti
+	bound.latMin = lat - (multi*r/6371000)*180/math.Pi
+	bound.latMax = lat + (multi*r/6371000)*180/math.Pi
+	bound.longMin = long - (multi*r/6371000)*180/math.Pi
+	bound.longMax = long + (multi*r/6371000)*180/math.Pi
+	return bound, nil
 }
 
 func siteVehicle(wg *sync.WaitGroup, siteReport *siteOverall, s site, td tosData, startTime, endTime, duration int) {
 	defer wg.Done()
 	lineEntry := make([]siteReportLine, 0)
-	bound := getGPSBound(s.Latitude, s.Longitude, s.Radius)
+	bound, err := getGPSBound(s.Latitude, s.Longitude, s.Radius)
+	if err != nil {
+		fmt.Println("Could not define the GPS bounds for "+s.Name, err)
+		return
+	}
 	var siteReportElem siteOverall
 	totalTimeAtSite := 0
 	totalUniqVehicles := 0
@@ -413,15 +453,20 @@ func checkSite(sd siteData, td tosData, endTime int, duration int) []siteOverall
 // Prints the time on site information in a presentable way
 func printSite(siteReports []siteOverall, expanded bool) {
 	fmt.Printf("\n\n")
-	for i, siteReport := range siteReports {
-		fmt.Printf("%d %-40s %-5d %d %s \n", i, siteReport.siteName, siteReport.totalVehicles, siteReport.totalVisits,
-			secToHours(siteReport.totalTime/siteReport.totalVisits))
-		if expanded {
-			for _, visit := range siteReport.lineEntry {
-				fmt.Printf("%-6s %-25s %-35s %-35s %12s %f %f \n", visit.vehicleName, visit.driverName, time.Unix(int64(visit.arrival/1000), 0),
-					time.Unix(int64(visit.departure/1000), 0), secToHours((visit.departure-visit.arrival)/1000), visit.lat, visit.long)
+	// Iterate through sites
+	for _, siteReport := range siteReports {
+		// If site was visited, display information
+		if siteReport.totalVisits > 0 {
+			fmt.Printf("%-40s %-5d %d %s \n", siteReport.siteName, siteReport.totalVehicles, siteReport.totalVisits,
+				secToHours(siteReport.totalTime/siteReport.totalVisits))
+			// If user would like detailed trip information for the sites
+			if expanded {
+				for _, visit := range siteReport.lineEntry {
+					fmt.Printf("%-6s %-25s %-35s %-35s %12s %f %f \n", visit.vehicleName, visit.driverName, time.Unix(int64(visit.arrival/1000), 0),
+						time.Unix(int64(visit.departure/1000), 0), secToHours((visit.departure-visit.arrival)/1000), visit.lat, visit.long)
+				}
+				fmt.Printf("\n")
 			}
-			fmt.Printf("\n")
 		}
 	}
 	fmt.Printf("\n")
