@@ -373,13 +373,23 @@ func getGPSBound(lat, long, r float32) (latLongRange, error) {
 
 	// Assuming radius is sufficently small, and vehicles are not driving north or south enough,
 	// such that we have to check for latitude overlapping at the poles
-	// TODO: add conditional to check if latitude overlaps at pole
 	var bound latLongRange
 	multi := conf.BoundMulti
 	bound.latMin = lat - (multi*r/6371000)*180/math.Pi
 	bound.latMax = lat + (multi*r/6371000)*180/math.Pi
+	// // Check if latitude bounds overlap over north or south poles, used to catch very large bounds
+	if bound.latMax > 90 || bound.latMin < -90 {
+		return latLongRange{}, errors.New("error: bounds overlap over north or south pole")
+	}
 	bound.longMin = long - (multi*r/6371000)*180/math.Pi
 	bound.longMax = long + (multi*r/6371000)*180/math.Pi
+	// If longitude min/max cuts over 180th Meridian, create belt around earth whose width is difference of min and max latitude. This will likely pass more candidate GPS coordinates to haversine,
+	// but currently preferable to introducing more complex logic and conditionals
+	if bound.longMin < -180 || bound.longMax > 180 {
+		bound.longMin = -180
+		bound.longMax = 180
+	}
+
 	return bound, nil
 }
 
@@ -486,9 +496,9 @@ func secToHours(seconds int) string {
 
 // Calculates the great circle distance between two GPS coordinates on an geometrical approximation of Earth (Ellipsoid)
 func greatCircleDist(lat1, long1, lat2, long2 float32) float32 {
-	R := 6371 * 1000 // meters
+	// Assuming radius of earth is 6371000 m
+	R := 6371000
 
-	// TODO: should variables all be float64, or is it fine to cast here? Speed (unknown) vs space (doubled)
 	radDifLat := degToRad(lat2 - lat1)
 	radDifLong := degToRad(long2 - long1)
 	radLat1 := degToRad(lat1)
