@@ -5,4 +5,4 @@ This project is used to recreate the Samsara Time on Site report using graphQL. 
 Project Layout
 ———————
 timeOnSite.go - The main project that executes the time on site report
-config.go - Not staged since pushing to cloud, but contains graphQL token and other configs
+config.json - Not staged since pushing to cloud, but contains graphQL token and other configs
