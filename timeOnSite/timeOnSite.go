@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+//TODO: Add tests
+
 // **** HTTP Structs *****
 
 // Query - Used to marshal graphQL query
@@ -147,9 +149,9 @@ func main() {
 	// TODO: Remove hardcoding when reading
 
 	groupID := "3991"
-	endTime := "1539057599999"
+	endTime := "1540341729936"
 	duration := "3600000"
-	expanded := true
+	expanded := false
 
 	fmt.Println("Running Time on Site Report...")
 	// Grab vehicle and driver data from graphQL
@@ -410,6 +412,19 @@ func siteVehicle(wg *sync.WaitGroup, siteReport *siteOverall, s site, td tosData
 		didVisit := false
 		// Check each end of trip for each vehicle for each site to figure out if vehicle ended within a site
 		for i, trip := range vehicle.VAR.TripEntries {
+
+			if i == 0 && greatCircleDist(trip.Start.Lat, trip.Start.Lng, s.Latitude, s.Longitude) <= s.Radius {
+				arrivalTime := startTime
+				departureTime := trip.Start.Time
+				if departureTime >= arrivalTime {
+					sRL := siteReportLine{trip.Driver.Name, arrivalTime, departureTime, vehicle.Name, trip.Start.Lat, trip.Start.Lng}
+					lineEntry = append(lineEntry, sRL)
+					totalTimeAtSite += (departureTime - arrivalTime) / 1000
+					totalUniqVisits++
+					didVisit = true
+				}
+			}
+
 			// Check if this is the end of the recorded trips, if so, use user inputted endTime as the departureTime
 			var departureTime int
 			if i >= len(vehicle.VAR.TripEntries)-1 {
