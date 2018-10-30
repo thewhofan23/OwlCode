@@ -146,7 +146,7 @@ func main() {
 
 	programStart := time.Now()
 
-	// TODO: Remove hardcoding when reading
+	// TODO: Remove hardcoding when reading, ask eric about best way to manage
 
 	groupID := "3991"
 	endTime := "1540341729936"
@@ -195,8 +195,8 @@ func main() {
 
 // **** SUPPORTING FUNCTIONS ****
 
-// Requests driver and vehicle information from graphQL /M
-// Nearly all runtime of program happens here when requesting data from the server. Around 90% of total time
+// Requests driver and vehicle information from graphQL
+// Nearly all runtime of program happens here when requesting data from the server.
 func tosQuery(id, end, duration string) (tosData, error) {
 	// Read in the access token from an untracked local file
 	file, err := os.Open("config.json")
@@ -359,6 +359,15 @@ func siteQuery(id string) (siteData, error) {
 
 // Creates the bounding rectangle used to quickly condition if GPS coordinate is within a site
 func getGPSBound(lat, long, r float32) (latLongRange, error) {
+	// If no radius, just return initial coordinates
+	if r == 0 {
+		return latLongRange{long, long, lat, lat}, nil
+	}
+	// If radius is negative, just flip sign
+	if r < 0 {
+		r = -r
+	}
+
 	file, err := os.Open("config.json")
 	if err != nil {
 		fmt.Println("File open failed: ", err)
@@ -433,8 +442,8 @@ func siteVehicle(wg *sync.WaitGroup, siteReport *siteOverall, s site, td tosData
 				departureTime = vehicle.VAR.TripEntries[i+1].Start.Time
 			}
 			// Check if point is within bounds and within time frame before using greatCircleDist (heavy computation)
-			if trip.End.Lat > bound.latMin && trip.End.Lat < bound.latMax &&
-				trip.End.Lng > bound.longMin && trip.End.Lng < bound.longMax && departureTime-trip.End.Time > 0 && trip.End.Time >= startTime {
+			if trip.End.Lat >= bound.latMin && trip.End.Lat <= bound.latMax &&
+				trip.End.Lng >= bound.longMin && trip.End.Lng <= bound.longMax && departureTime-trip.End.Time > 0 && trip.End.Time >= startTime {
 
 				// Calculate if distance is within radius using great circle formula
 				if greatCircleDist(trip.End.Lat, trip.End.Lng, s.Latitude, s.Longitude) <= s.Radius {
@@ -499,10 +508,12 @@ func printSite(siteReports []siteOverall, expanded bool) {
 
 // Formats seconds into the time on site format of Xh Ym, or Xm Ys
 func secToHours(seconds int) string {
-	if seconds/3600 > 0 {
+	if seconds/3600 >= 1 {
 		hours := seconds / 3600
 		min := seconds % 60
 		return strconv.Itoa(hours) + "h " + strconv.Itoa(min) + "m"
+	} else if seconds < 0 {
+		return "negative"
 	}
 	min := seconds / 60
 	sec := seconds % 60
