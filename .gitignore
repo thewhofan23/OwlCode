@@ -3,6 +3,8 @@
 /faceID/config.json
 /timeOnSite/debug
 /timeOnSite/.vscode
+/recordingTime/config.json
+/recordingTime/debug
 
 # Compiled source #
 ###################
