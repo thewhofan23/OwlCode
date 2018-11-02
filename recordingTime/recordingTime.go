@@ -59,6 +59,12 @@ type recordData struct {
 
 type device struct {
 	ObjectStat []recordOS
+	DeviceName string `json:"name"`
+	Group      groupName
+}
+
+type groupName struct {
+	Name string
 }
 
 type recordOS struct {
@@ -66,18 +72,25 @@ type recordOS struct {
 	IntValue    int
 }
 
-type cameraElement struct {
+type cameraRecordElement struct {
 	startTime int
 	endTime   int
 	duration  int
 }
 
-type cameraElements []cameraElement
+type cameraRecordElements struct {
+	cameraElement []cameraRecordElement
+	totalRecord   int
+}
 
 func main() {
-	deviceID := "212014918137973"
-	endTimeMs := "1540400526230"
-	startTimeMs := "1540397854230"
+
+	fmt.Println("\n Welcome to the camera recording time calculator!")
+
+	input := os.Args
+	deviceID := input[1]    //"212014918137973"
+	startTimeMs := input[2] //"1540397854230"
+	endTimeMs := input[3]   //"1540400526230"
 	startTimeMsInt, err := strconv.Atoi(startTimeMs)
 	if err != nil {
 		fmt.Println("Error: ", err)
@@ -94,20 +107,20 @@ func main() {
 		return
 	}
 	aggregateRecording := parseRecording(cameraData, startTimeMsInt, endTimeMsInt)
-	displayRecording(aggregateRecording)
+	displayRecording(aggregateRecording, cameraData, startTimeMsInt, endTimeMsInt)
 }
 
-func displayRecording(records cameraElements) {
-	total := 0
-	fmt.Printf("\n\n\n")
-	for _, r := range records {
-		total += r.duration
+func displayRecording(records cameraRecordElements, data recordData, startTimeMs, endTimeMs int) {
+	fmt.Printf("\n\n")
+	for _, r := range records.cameraElement {
 		fmt.Printf("Start: %s   End: %s    Duration: %s \n", time.Unix(int64(r.startTime/1000), 0), time.Unix(int64(r.endTime/1000), 0), secToHours(r.duration/1000))
 	}
-	fmt.Println("\n Total recording Time: ", secToHours(total/1000))
+	fmt.Println("\nVehicle Name: ", data.Device.DeviceName)
+	fmt.Println("Group Name: ", data.Device.Group.Name)
+	fmt.Printf("\n Total recording time from %s to %s is: %s\n\n", time.Unix(int64(startTimeMs/1000), 0), time.Unix(int64(endTimeMs/1000), 0), secToHours(records.totalRecord/1000))
 }
 
-func parseRecording(data recordData, startTimeMs, endTimeMs int) cameraElements {
+func parseRecording(data recordData, startTimeMs, endTimeMs int) cameraRecordElements {
 	// Possible Edge Cases
 	// Only one segment NOT POSSIBLE
 	// No segments 	NOT POSSIBLE
@@ -115,13 +128,14 @@ func parseRecording(data recordData, startTimeMs, endTimeMs int) cameraElements 
 	// In range, segment ends as recording
 	// In range, entirely one segment is recording
 	elapsedTime, endTime, startTime := 0, 0, 0
-	var cE cameraElements
+	var cREs cameraRecordElements
 	segmentList := data.Device.ObjectStat
 
+	// Check through camera segments
 	for i := 0; i < len(segmentList)-1; i++ {
 		elapsedTime = 0
 
-		// If segment starts as recording
+		// If the segment is recording
 		if segmentList[i].IntValue == 1 {
 			// Get startTime
 			if i == 0 && segmentList[0].ChangedAtMs <= startTimeMs {
@@ -135,12 +149,13 @@ func parseRecording(data recordData, startTimeMs, endTimeMs int) cameraElements 
 			} else {
 				endTime = segmentList[i+1].ChangedAtMs
 			}
-
+			// Calculate total record time, add to totalRecord time, append segment to record list
 			elapsedTime = endTime - startTime
-			cE = append(cE, cameraElement{startTime, endTime, elapsedTime})
+			cREs.totalRecord += elapsedTime
+			cREs.cameraElement = append(cREs.cameraElement, cameraRecordElement{startTime, endTime, elapsedTime})
 		}
 	}
-	return cE
+	return cREs
 }
 
 func recordingQuery(deviceID, endTimeMs, durationMs string) (recordData, error) {
@@ -164,6 +179,10 @@ func recordingQuery(deviceID, endTimeMs, durationMs string) (recordData, error) 
 
 	query := `{
 		device(id:` + deviceID + `) {
+			group{
+				name
+			}
+			name
 		  objectStat(statTypeEnum: osDDashcamState, endTime:` + endTimeMs + `, duration: ` + durationMs + `) {
 			changedAtMs
 			intValue
