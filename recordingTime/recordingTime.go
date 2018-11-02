@@ -76,9 +76,9 @@ type cameraElements []cameraElement
 
 func main() {
 	deviceID := "212014918137973"
-	endTimeMs := "1540588320000"
-	durationMs := "354240000"
-	durationMsInt, err := strconv.Atoi(durationMs)
+	endTimeMs := "1540400526230"
+	startTimeMs := "1540397854230"
+	startTimeMsInt, err := strconv.Atoi(startTimeMs)
 	if err != nil {
 		fmt.Println("Error: ", err)
 		return
@@ -88,12 +88,12 @@ func main() {
 		fmt.Println("Error: ", err)
 		return
 	}
-	cameraData, err := recordingQuery(deviceID, endTimeMs, durationMs)
+	cameraData, err := recordingQuery(deviceID, endTimeMs, strconv.Itoa(endTimeMsInt-startTimeMsInt))
 	if err != nil {
 		fmt.Println("Error encountered:", err)
 		return
 	}
-	aggregateRecording := parseRecording(cameraData, endTimeMsInt-durationMsInt, endTimeMsInt)
+	aggregateRecording := parseRecording(cameraData, startTimeMsInt, endTimeMsInt)
 	displayRecording(aggregateRecording)
 }
 
@@ -122,26 +122,13 @@ func parseRecording(data recordData, startTimeMs, endTimeMs int) cameraElements 
 		elapsedTime = 0
 
 		// If segment starts as recording
-		if i == 0 && segmentList[0].IntValue == 1 {
+		if segmentList[i].IntValue == 1 {
 			// Get startTime
-			if segmentList[0].ChangedAtMs <= startTimeMs {
+			if i == 0 && segmentList[0].ChangedAtMs <= startTimeMs {
 				startTime = startTimeMs
 			} else {
-				startTime = segmentList[0].ChangedAtMs
+				startTime = segmentList[i].ChangedAtMs
 			}
-			// Get endTime
-			if segmentList[1].ChangedAtMs >= endTimeMs {
-				endTime = endTimeMs
-			} else {
-				endTime = segmentList[1].ChangedAtMs
-			}
-
-			elapsedTime = endTime - startTime
-			cE = append(cE, cameraElement{startTime, endTime, elapsedTime})
-
-		} else if segmentList[i].IntValue == 1 {
-			// Get startTime
-			startTime = segmentList[i].ChangedAtMs
 			// Get endTime
 			if segmentList[i+1].ChangedAtMs >= endTimeMs {
 				endTime = endTimeMs
