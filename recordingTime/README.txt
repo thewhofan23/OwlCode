@@ -6,12 +6,9 @@ Project Layout
 ———————
 recordingTime.go - The main project that grabs recording data and convert to total time
 
-config.json - Not staged since pushing to cloud, but contains graphQL token and other configs of this format: 
-
-{
-    "token": “<your API token>”,
-    "timeout": 15
-}
+config.json - Contains graphQL token and HTTP time out configuration. This will have to be revised with your custom graphQL API token
 
 recordingTime_test.go - Contains tests to verify that the recordingTime still operates correctly after changes are made to recordingTime.go. Run with “go test”.
+
+
 
