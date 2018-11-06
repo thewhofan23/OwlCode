@@ -88,9 +88,16 @@ func main() {
 	fmt.Println("\n Welcome to the camera recording time calculator!")
 
 	input := os.Args
+
+	if len(input) < 4 {
+		fmt.Println("Format Invalid!: Please follow this format: ./recordingTime <deviceID> <startTimeMs> <endTimeMs>")
+		return
+	}
+
 	deviceID := input[1]    //"212014918137973"
 	startTimeMs := input[2] //"1540397854230"
 	endTimeMs := input[3]   //"1540400526230"
+
 	startTimeMsInt, err := strconv.Atoi(startTimeMs)
 	if err != nil {
 		fmt.Println("Error: ", err)
