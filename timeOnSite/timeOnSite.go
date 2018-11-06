@@ -4,20 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math"
 	"net/http"
 	"os"
-	"runtime/pprof"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
-
-//TODO: Add tests
 
 // **** HTTP Structs *****
 
@@ -127,42 +123,62 @@ type latLongRange struct {
 }
 
 // **** Main *****
-var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
-
 func main() {
-
-	// Used to profile the program
-	flag.Parse()
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			log.Fatal("could not create CPU profile: ", err)
-		}
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal("could not start CPU profile: ", err)
-		}
-		defer pprof.StopCPUProfile()
-	}
 
 	programStart := time.Now()
 
-	// TODO: Remove hardcoding when reading, ask eric about best way to manage
+	fmt.Println("\nWelcome to the Time on Site Report Tool!")
 
-	groupID := "3991"
-	endTime := "1540341729936"
-	duration := "3600000"
-	expanded := false
+	// Grab CLI arguments
+	input := os.Args
+
+	// Check if CLI argument length is valid
+	if len(input) != 5 {
+		fmt.Println("Format Invalid!: Please follow this format: ./timeOnSite <groupID> <endTimeMs> <durationMs> <itemize trips (bool)>")
+		return
+	}
+
+	groupID := input[1]    // e.g 3991
+	endTimeMs := input[2]  // e.g 1540341729936
+	durationMs := input[3] // e.g 3600000
+	expanded := true       // Assume they want expanded view
+
+	// Input checking the expanded view option. If false or f, do not expand, otherwise
+	if strings.ToLower(input[4]) == "false" || strings.ToLower(input[4]) == "f" {
+		expanded = false // false
+	} else if strings.ToLower(input[4]) == "true" || strings.ToLower(input[4]) == "t" {
+		fmt.Println("Registered true, Itemizing the trips\n")
+	} else {
+		fmt.Println("Could not understand expanded argument,", input[4], ". Please input as \"true\" or \"false\" for expanded view. Assuming true. \n")
+	}
+
+	// Check the input arguments to see if valid integers
+	_, err := strconv.Atoi(groupID)
+	if err != nil {
+		fmt.Println("Could not convert groupID to an integer")
+		return
+	}
+	intEndTime, err := strconv.Atoi(endTimeMs)
+	if err != nil {
+		fmt.Println("Could not convert endTime to an integer")
+		return
+	}
+	intDuration, err := strconv.Atoi(durationMs)
+	if err != nil {
+		fmt.Println("Could not convert duration to an integer")
+		return
+	}
 
 	fmt.Println("Running Time on Site Report...")
-	// Grab vehicle and driver data from graphQL
 	start := time.Now()
-	tosData, err := tosQuery(groupID, endTime, duration)
+
+	// Grab vehicle and driver data from graphQL
+	tosData, err := tosQuery(groupID, endTimeMs, durationMs)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 	fmt.Println("Total time to fetch vehicle/location data: ", time.Since(start))
-
 	start1 := time.Now()
 
 	// Grab site data from graphQL
@@ -173,18 +189,6 @@ func main() {
 	}
 
 	fmt.Println("Total time to fetch site data: ", time.Since(start1))
-
-	// Format input arguments
-	intEndTime, err := strconv.Atoi(endTime)
-	if err != nil {
-		fmt.Println("Could not convert endTime to an integer")
-		return
-	}
-	intDuration, err := strconv.Atoi(duration)
-	if err != nil {
-		fmt.Println("Could not convert duration to an integer")
-		return
-	}
 
 	// Run the time on site report using the data from earlier graphQL queries
 	report := checkSite(siteData, tosData, intEndTime, intDuration)

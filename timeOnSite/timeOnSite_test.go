@@ -138,7 +138,3 @@ func TestGetGPSBound(t *testing.T) {
 	}
 
 }
-
-func TestTosQuery(t *testing.T) {
-	// TODO: Ask Eric about this!
-}

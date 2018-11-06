@@ -89,15 +89,21 @@ func main() {
 
 	input := os.Args
 
-	if len(input) < 4 {
+	if len(input) != 4 {
 		fmt.Println("Format Invalid!: Please follow this format: ./recordingTime <deviceID> <startTimeMs> <endTimeMs>")
 		return
 	}
 
-	deviceID := input[1]    //"212014918137973"
-	startTimeMs := input[2] //"1540397854230"
-	endTimeMs := input[3]   //"1540400526230"
+	deviceID := input[1]    // e.g. 212014918137973
+	startTimeMs := input[2] // e.g. 1540397854230
+	endTimeMs := input[3]   // e.g. 1540400526230
 
+	// Check the inputs to see if they are valid integers
+	_, err := strconv.Atoi(deviceID)
+	if err != nil {
+		fmt.Println("Error: ", err)
+		return
+	}
 	startTimeMsInt, err := strconv.Atoi(startTimeMs)
 	if err != nil {
 		fmt.Println("Error: ", err)
@@ -108,12 +114,20 @@ func main() {
 		fmt.Println("Error: ", err)
 		return
 	}
+	if startTimeMsInt >= endTimeMsInt {
+		fmt.Println("Start time is greater than or equal to end time! Please correct your times.")
+		return
+	}
+
+	// Query for the recording data from graphQL
 	cameraData, err := recordingQuery(deviceID, endTimeMs, strconv.Itoa(endTimeMsInt-startTimeMsInt))
 	if err != nil {
 		fmt.Println("Error encountered:", err)
 		return
 	}
+	// Parse and calculate the queried data
 	aggregateRecording := parseRecording(cameraData, startTimeMsInt, endTimeMsInt)
+	// Display the results
 	displayRecording(aggregateRecording, cameraData, startTimeMsInt, endTimeMsInt)
 }
 
